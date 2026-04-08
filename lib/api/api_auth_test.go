@@ -7,6 +7,7 @@
 package api
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -190,5 +191,73 @@ func TestTokenManager(t *testing.T) {
 	}
 	if tm.Check(t3) {
 		t.Errorf("token %q should be invalid", t3)
+	}
+}
+
+func TestTokenManagerNoExpiry(t *testing.T) {
+	t.Parallel()
+
+	mdb, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		mdb.Close()
+	})
+	kdb := db.NewMiscDB(mdb)
+	clock := &mockClock{now: time.Now()}
+
+	tm := newTokenManager("testTokensNoExpiry", kdb, -1, 3)
+	tm.timeNow = clock.Now
+
+	token := tm.New()
+	if expiry := tm.tokens.Tokens[token]; expiry != noExpiryNano {
+		t.Fatalf("token should use no-expiry sentinel, got %d", expiry)
+	}
+
+	clock.wind(365 * 24 * time.Hour)
+	if !tm.Check(token) {
+		t.Fatal("token should still be valid after long time when no-expiry is enabled")
+	}
+}
+
+func TestSessionCookieMaxAgeNoExpiry(t *testing.T) {
+	t.Parallel()
+
+	m := tokenCookieManager{
+		guiCfg: config.GUIConfiguration{
+			SessionCookieDurationS: -1,
+		},
+	}
+	if got := m.sessionCookieMaxAge(); got != math.MaxInt32 {
+		t.Fatalf("unexpected max age %d", got)
+	}
+}
+
+func TestSessionCookiePathUsesPreparedConfigValue(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		path string
+	}{
+		{name: "default", path: "/"},
+		{name: "subpath", path: "/st"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			m := tokenCookieManager{
+				guiCfg: config.GUIConfiguration{
+					SessionCookiePath: tc.path,
+				},
+			}
+			if got := m.guiCfg.SessionCookiePath; got != tc.path {
+				t.Fatalf("unexpected path %q != %q", got, tc.path)
+			}
+		})
 	}
 }
